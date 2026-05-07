@@ -1,0 +1,7 @@
+.env
+.env.production
+dist
+local.db
+local.db-*
+node_modules
+tmp

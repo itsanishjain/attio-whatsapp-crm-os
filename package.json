@@ -1,0 +1,31 @@
+{
+  "name": "attio-whatsapp-crm-os",
+  "private": true,
+  "packageManager": "bun@1.3.13",
+  "workspaces": [
+    "apps/attio",
+    "packages/core"
+  ],
+  "scripts": {
+    "dev:attio": "cd apps/attio && bun run dev",
+    "dev": "bun run dev:attio",
+    "db:push:attio": "bun run --cwd apps/attio db:push",
+    "db:push": "bun run db:push:attio",
+    "db:push:prod:attio": "bun run --cwd apps/attio db:push:prod",
+    "db:push:prod": "bun run db:push:prod:attio",
+    "db:studio:attio": "bun run --cwd apps/attio db:studio",
+    "db:studio": "bun run db:studio:attio",
+    "db:studio:prod:attio": "bun run --cwd apps/attio db:studio:prod",
+    "db:studio:prod": "bun run db:studio:prod:attio",
+    "build:attio": "cd apps/attio && bun run build",
+    "build": "bun run build:attio",
+    "docker:up:attio": "bun run --cwd apps/attio docker:up",
+    "docker:up": "bun run docker:up:attio",
+    "lint:attio": "bun run --cwd apps/attio lint",
+    "lint": "bun run lint:attio",
+    "test:attio": "bun run --cwd apps/attio test",
+    "test": "bun run test:attio",
+    "typecheck:attio": "bun run --cwd apps/attio typecheck",
+    "typecheck": "bun run typecheck:attio"
+  }
+}

@@ -1,0 +1,14 @@
+.git
+.github
+node_modules
+dist
+.env
+.env.local
+.env.production
+coverage
+.DS_Store
+local.db
+local.db-*
+.baileys-auth
+tmp
+deploy

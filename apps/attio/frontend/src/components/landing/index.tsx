@@ -1,0 +1,9 @@
+export { Navbar } from './navbar';
+export { Hero } from './hero';
+export { Features } from './features';
+export { DashboardPreview } from './dashboard-preview';
+export { Integrations } from './integrations';
+export { UseCases } from './use-cases';
+export { FinalCTA } from './final-cta';
+export { Footer } from './footer';
+export { FloatingWhatsApp } from './floating-whatsapp';
