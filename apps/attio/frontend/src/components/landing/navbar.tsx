@@ -22,33 +22,15 @@ export function Navbar() {
           WhatSync
         </h2>
       </div>
-      <div className="hidden md:flex flex-1 justify-end gap-8">
-        {/* <div className="flex items-center gap-9">
-          <a
+      <div className="hidden flex-1 justify-end gap-8 md:flex">
+        <div className="flex items-center gap-6">
+          <Link
             className="text-sm font-medium leading-normal hover:text-primary"
-            href="#"
+            to="/docs"
           >
-            Product
-          </a>
-          <a
-            className="text-sm font-medium leading-normal hover:text-primary"
-            href="#"
-          >
-            Use Cases
-          </a>
-          <a
-            className="text-sm font-medium leading-normal hover:text-primary"
-            href="#"
-          >
-            Pricing
-          </a>
-          <a
-            className="text-sm font-medium leading-normal hover:text-primary"
-            href="#"
-          >
-            Integrations
-          </a>
-        </div> */}
+            Docs
+          </Link>
+        </div>
         <Button>
           <Link to="/dashboard">Get Access</Link>
         </Button>

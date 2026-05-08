@@ -22,6 +22,12 @@ export function Footer() {
         </p>
       </div>
       <div className="flex items-center gap-6">
+        <Link
+          className="text-sm font-medium text-muted-foreground hover:text-primary"
+          to="/docs"
+        >
+          Docs
+        </Link>
         <a
           className="text-sm font-medium text-muted-foreground hover:text-primary"
           href="mailto:hello@appstronauts.shop"
