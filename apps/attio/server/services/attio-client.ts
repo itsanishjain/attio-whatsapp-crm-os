@@ -38,33 +38,49 @@ const WHATSAPP_ATTRIBUTE_CONFIGS = [
   {
     slug: 'whatsapp_phone_number',
     config: {
-      title: 'WhatsApp Phone Number',
+      title: 'WhatsApp Phone Number (Raw)',
       type: 'text',
-      description: 'Raw WhatsApp phone number used for matching.',
+      description: 'Raw WhatsApp identifier used as a reliable fallback key.',
     },
   },
   {
-    slug: 'whatsapp_last_message_at',
+    slug: 'whatsapp_last_inbound_message',
     config: {
-      title: 'Last WhatsApp Message At',
-      type: 'timestamp',
-      description: 'Timestamp of the latest WhatsApp activity.',
+      title: 'Last Inbound WhatsApp Message',
+      type: 'text',
+      description: 'Most recent message received from the contact.',
     },
   },
   {
-    slug: 'whatsapp_last_message_direction',
+    slug: 'whatsapp_last_outbound_message',
     config: {
-      title: 'Last WhatsApp Message Direction',
       type: 'text',
-      description: 'Direction of the latest synced WhatsApp message.',
+      title: 'Last Outbound WhatsApp Message',
+      description: 'Most recent message you sent to the contact.',
     },
   },
   {
-    slug: 'whatsapp_last_message_text',
+    slug: 'whatsapp_last_inbound_date',
     config: {
-      title: 'Last WhatsApp Message Text',
-      type: 'text',
-      description: 'Text snapshot of the latest synced WhatsApp message.',
+      title: 'Last Contact By Client',
+      type: 'date',
+      description: 'Date when the contact last messaged you.',
+    },
+  },
+  {
+    slug: 'whatsapp_last_outbound_date',
+    config: {
+      title: 'Last Contacted Client',
+      type: 'date',
+      description: 'Date when you last messaged the contact.',
+    },
+  },
+  {
+    slug: 'whatsapp_first_contact_date',
+    config: {
+      title: 'WhatsApp Conversation Started',
+      type: 'date',
+      description: 'First known WhatsApp interaction date.',
     },
   },
   {
@@ -73,6 +89,64 @@ const WHATSAPP_ATTRIBUTE_CONFIGS = [
       title: 'WhatsApp Conversation',
       type: 'text',
       description: 'WhatsApp deep link for this contact.',
+    },
+  },
+  {
+    slug: 'whatsapp_message_text',
+    config: {
+      title: 'WhatsApp Message Text',
+      type: 'text',
+      description: 'Formatted snapshot of the latest tracked WhatsApp message.',
+    },
+  },
+  {
+    slug: 'whatsapp_message_date',
+    config: {
+      title: 'WhatsApp Message Date',
+      type: 'date',
+      description: 'Date of the latest tracked WhatsApp message for filtering.',
+    },
+  },
+  {
+    slug: 'whatsapp_message_direction',
+    config: {
+      title: 'WhatsApp Message Direction',
+      type: 'select',
+      description:
+        'Inbound or outbound direction of the latest tracked message.',
+    },
+  },
+  {
+    slug: 'whatsapp_total_messages',
+    config: {
+      title: 'Total WhatsApp Messages',
+      type: 'number',
+      description: 'Running total of inbound and outbound WhatsApp messages.',
+      config: { decimal_places: 0 },
+    },
+  },
+  {
+    slug: 'whatsapp_agent_number',
+    config: {
+      title: 'WhatsApp Agent Number',
+      type: 'text',
+      description: 'Latest sending agent or business number used for sync.',
+    },
+  },
+  {
+    slug: 'whatsapp_agent_name',
+    config: {
+      title: 'WhatsApp Agent Name',
+      type: 'text',
+      description: 'Latest sending agent display name used for sync.',
+    },
+  },
+  {
+    slug: 'whatsapp_last_message_at',
+    config: {
+      title: 'Last WhatsApp Message At',
+      type: 'timestamp',
+      description: 'Sortable exact datetime of latest WhatsApp activity.',
     },
   },
 ];
@@ -183,7 +257,7 @@ export class AttioClient {
     const phone = ensurePlusPhone(input.phone);
     const values: Record<string, unknown> = {
       ...input.values,
-      whatsapp_phone_number: phone,
+      whatsapp_phone_number: input.values?.whatsapp_phone_number ?? phone,
     };
 
     if (input.name) {
@@ -385,10 +459,10 @@ export class AttioClient {
     }
 
     const directionAttribute = await this.getAttributeDetails(
-      'whatsapp_last_message_direction',
+      'whatsapp_message_direction',
     );
     if (directionAttribute?.type === 'select') {
-      await this.ensureSelectOptions('whatsapp_last_message_direction', [
+      await this.ensureSelectOptions('whatsapp_message_direction', [
         { title: 'Inbound', api_slug: 'inbound' },
         { title: 'Outbound', api_slug: 'outbound' },
       ]);
