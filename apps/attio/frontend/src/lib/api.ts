@@ -90,8 +90,17 @@ export async function bootstrapIntegration() {
   return (await res.json()) as IntegrationStatusResponse;
 }
 
-export async function startAttioOauth() {
-  const res = await apiClient.api.integration.oauth.start.$get();
+export async function startAttioOauth(
+  returnTo?: '/dashboard' | '/whatsapp-qr',
+) {
+  const searchParams = new URLSearchParams();
+  if (returnTo) {
+    searchParams.set('returnTo', returnTo);
+  }
+
+  const res = await fetch(
+    `/api/integration/oauth/start${searchParams.size ? `?${searchParams}` : ''}`,
+  );
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as {
       error?: string;

@@ -13,6 +13,7 @@ const statePayloadSchema = z.object({
   nonce: z.string().min(1),
   sid: z.string().min(1),
   installationId: z.string().optional(),
+  returnTo: z.enum(['/dashboard', '/whatsapp-qr']).optional(),
 });
 
 const oauthWindowMs = 10 * 60 * 1000;
@@ -53,6 +54,7 @@ export function hasAttioOauthConfig() {
 export function createAttioOauthState(
   sessionId: string,
   installationId?: string | null,
+  returnTo: '/dashboard' | '/whatsapp-qr' = '/dashboard',
   now = Date.now(),
 ) {
   const payload = statePayloadSchema.parse({
@@ -60,6 +62,7 @@ export function createAttioOauthState(
     nonce: randomBytes(16).toString('hex'),
     sid: sessionId,
     installationId: installationId ?? undefined,
+    returnTo,
   });
   const encodedPayload = encodeBase64Url(JSON.stringify(payload));
 

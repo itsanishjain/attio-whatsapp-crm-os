@@ -46,11 +46,16 @@ const attioCallbackQuerySchema = z.object({
   error: z.string().min(1).optional(),
 });
 
-function buildDashboardRedirectUrl(
+function getSafeReturnTo(value: string | undefined) {
+  return value === '/whatsapp-qr' ? '/whatsapp-qr' : '/dashboard';
+}
+
+function buildIntegrationRedirectUrl(
   requestUrl: string,
+  returnTo: '/dashboard' | '/whatsapp-qr',
   status: 'connected' | 'error',
 ) {
-  const redirectUrl = new URL('/dashboard', requestUrl);
+  const redirectUrl = new URL(returnTo, requestUrl);
   redirectUrl.searchParams.set('attio', status);
   return redirectUrl.toString();
 }
@@ -145,7 +150,11 @@ export const integrationRoutes = new Hono()
 
       const browserSessionId = getOrCreateBrowserSessionId(context);
       const installationId = await ensureAuthorizedInstallation(context);
-      const state = createAttioOauthState(browserSessionId, installationId);
+      const state = createAttioOauthState(
+        browserSessionId,
+        installationId,
+        getSafeReturnTo(context.req.query('returnTo')),
+      );
 
       return context.json(
         integrationOauthStartResponseSchema.parse({
@@ -174,18 +183,23 @@ export const integrationRoutes = new Hono()
   })
   .get('/oauth/callback', async (context) => {
     const query = attioCallbackQuerySchema.parse(context.req.query());
-    const errorRedirectUrl = buildDashboardRedirectUrl(
-      getPublicRequestUrl(context).toString(),
-      'error',
-    );
+    let callbackReturnTo: '/dashboard' | '/whatsapp-qr' = '/dashboard';
 
     if (query.error || !query.code || !query.state) {
-      return context.redirect(errorRedirectUrl, 302);
+      return context.redirect(
+        buildIntegrationRedirectUrl(
+          getPublicRequestUrl(context).toString(),
+          callbackReturnTo,
+          'error',
+        ),
+        302,
+      );
     }
 
     try {
       const oauthState = verifyAttioOauthState(query.state);
       const browserSessionId = getBrowserSessionId(context);
+      callbackReturnTo = oauthState?.returnTo ?? '/dashboard';
 
       if (
         !oauthState ||
@@ -252,7 +266,7 @@ export const integrationRoutes = new Hono()
       setInstallationSessionCookie(context, installation.id);
 
       return context.redirect(
-        buildPublicUrl(context, '/dashboard?attio=connected'),
+        buildPublicUrl(context, `${callbackReturnTo}?attio=connected`),
         302,
       );
     } catch (error) {
@@ -264,7 +278,14 @@ export const integrationRoutes = new Hono()
         browserSessionId: getBrowserSessionId(context),
       });
 
-      return context.redirect(errorRedirectUrl, 302);
+      return context.redirect(
+        buildIntegrationRedirectUrl(
+          getPublicRequestUrl(context).toString(),
+          callbackReturnTo,
+          'error',
+        ),
+        302,
+      );
     }
   })
   .delete('/disconnect', async (context) => {

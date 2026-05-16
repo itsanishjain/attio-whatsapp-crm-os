@@ -1,19 +1,39 @@
 import {
   AccessLinkCard,
   AttioIntegrationCard,
-  DashboardHeader,
   GroupSyncCard,
   NumberFiltersCard,
   SharingModeCard,
   TimezoneCard,
-  WhatsAppSessionCard,
 } from '@/components/dashboard';
 import type { GroupOption, SelectedGroup } from '@/components/dashboard/types';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import {
   type SettingsPayload,
   addNumberFilter,
   bootstrapIntegration,
   bulkImportNumberFilters,
+  connectWhatsapp,
   deleteNumberFilter,
   disconnectIntegration,
   disconnectWhatsapp,
@@ -21,17 +41,38 @@ import {
   saveGroupSync,
   settingsQueryOptions,
   startAttioOauth,
-  startOfficialWhatsappOnboarding,
   updateSettings,
   whatsappGroupsQueryOptions,
   whatsappStatusQueryOptions,
 } from '@/lib/api';
 import { groupSyncSelectedGroupSchema } from '@shared/schemas/settings';
 import type { ManagedInstallationSettings } from '@shared/schemas/settings';
+import type { WhatsappStatusResponse } from '@shared/schemas/whatsapp';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createFileRoute } from '@tanstack/react-router';
-import { Loader2, Settings } from 'lucide-react';
+import { Link, createFileRoute } from '@tanstack/react-router';
+import {
+  AlertCircle,
+  ArrowLeft,
+  CheckCircle2,
+  Loader2,
+  QrCode,
+  RefreshCw,
+  Settings,
+  Smartphone,
+  XCircle,
+} from 'lucide-react';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
+
+export const Route = createFileRoute('/whatsapp-qr')({
+  component: WhatsappQrPage,
+});
+
+const qrSteps = [
+  'Open WhatsApp on your phone.',
+  'Tap the three dots in the top-right corner, then tap Linked devices.',
+  'Tap "Link a Device".',
+  'Point your phone at this QR code.',
+];
 
 function sanitizeSelectedGroups(value: unknown): SelectedGroup[] {
   if (!Array.isArray(value)) {
@@ -55,18 +96,21 @@ function sanitizeSelectedGroups(value: unknown): SelectedGroup[] {
   );
 }
 
-export const Route = createFileRoute('/dashboard')({
-  component: Dashboard,
-});
+function getStatusLabel(whatsapp: WhatsappStatusResponse | null) {
+  if (whatsapp?.connected) {
+    return 'Connected';
+  }
 
-function Dashboard() {
+  return (whatsapp?.status ?? 'Loading').replace(/_/g, ' ');
+}
+
+function WhatsappQrPage() {
   const queryClient = useQueryClient();
-
   const [notice, setNotice] = useState<string | null>(null);
-  const [connectError, setConnectError] = useState<string | null>(null);
-  const [whatsappConnectError, setWhatsappConnectError] = useState<
-    string | null
-  >(null);
+  const [attioConnectError, setAttioConnectError] = useState<string | null>(
+    null,
+  );
+  const [qrConnectError, setQrConnectError] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>(
     'idle',
   );
@@ -101,8 +145,8 @@ function Dashboard() {
 
   const groupsQuery = useQuery(whatsappGroupsQueryOptions);
 
-  const status = integrationStatus.data ?? null;
   const whatsapp = whatsappStatus.data ?? null;
+  const attioStatus = integrationStatus.data ?? null;
   const settings = settingsQuery.data?.settings ?? null;
   const timezoneOptions = settingsQuery.data?.timezoneOptions ?? [];
   const numberFilters = settingsQuery.data?.numberFilters ?? [];
@@ -140,12 +184,12 @@ function Dashboard() {
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
-    const attioStatus = searchParams.get('attio');
+    const attioStatusParam = searchParams.get('attio');
     const whatsappConnectionStatus = searchParams.get('whatsapp');
 
-    if (attioStatus === 'connected') {
+    if (attioStatusParam === 'connected') {
       setNotice('Attio account connected');
-      setConnectError(null);
+      setAttioConnectError(null);
       void queryClient.invalidateQueries({
         queryKey: integrationStatusQueryOptions.queryKey,
       });
@@ -157,14 +201,14 @@ function Dashboard() {
       });
     }
 
-    if (attioStatus === 'error') {
-      setConnectError('Attio authorization failed');
+    if (attioStatusParam === 'error') {
       setNotice(null);
+      setAttioConnectError('Attio authorization failed');
     }
 
     if (whatsappConnectionStatus === 'connected') {
       setNotice('WhatsApp account connected');
-      setWhatsappConnectError(null);
+      setQrConnectError(null);
       void queryClient.invalidateQueries({
         queryKey: whatsappStatusQueryOptions.queryKey,
       });
@@ -172,12 +216,10 @@ function Dashboard() {
 
     if (whatsappConnectionStatus === 'error') {
       setNotice(null);
-      setWhatsappConnectError(
-        'WhatsApp connected, but bridge registration failed',
-      );
+      setQrConnectError('WhatsApp connected, but bridge registration failed');
     }
 
-    if (!attioStatus && !whatsappConnectionStatus) {
+    if (!attioStatusParam && !whatsappConnectionStatus) {
       return;
     }
 
@@ -189,12 +231,12 @@ function Dashboard() {
   }, [queryClient]);
 
   const connectIntegrationMut = useMutation({
-    mutationFn: () => startAttioOauth('/dashboard'),
+    mutationFn: () => startAttioOauth('/whatsapp-qr'),
     onSuccess: ({ authorizationUrl }) => {
       window.location.assign(authorizationUrl);
     },
     onError: (error) => {
-      setConnectError(error.message);
+      setAttioConnectError(error.message);
     },
   });
 
@@ -206,24 +248,27 @@ function Dashboard() {
         tenant: null,
       });
       setNotice('Integration disconnected');
-      setConnectError(null);
+      setAttioConnectError(null);
       queryClient.removeQueries({ queryKey: settingsQueryOptions.queryKey });
     },
     onError: (error) => {
-      setConnectError(error.message);
+      setAttioConnectError(error.message);
     },
   });
 
-  const connectOfficialWhatsappMut = useMutation({
+  const connectWhatsappMut = useMutation({
     mutationFn: async () => {
       await bootstrapIntegration();
-      return startOfficialWhatsappOnboarding();
+      return connectWhatsapp();
     },
-    onSuccess: ({ authorizationUrl }) => {
-      window.location.assign(authorizationUrl);
+    onSuccess: (data) => {
+      queryClient.setQueryData(whatsappStatusQueryOptions.queryKey, data);
+      setNotice('QR setup started');
+      setQrConnectError(null);
     },
     onError: (error) => {
-      setWhatsappConnectError(error.message);
+      setNotice(null);
+      setQrConnectError(error.message);
     },
   });
 
@@ -232,10 +277,11 @@ function Dashboard() {
     onSuccess: (data) => {
       queryClient.setQueryData(whatsappStatusQueryOptions.queryKey, data);
       setNotice('WhatsApp marked as disconnected');
-      setWhatsappConnectError(null);
+      setQrConnectError(null);
     },
     onError: (error) => {
-      setWhatsappConnectError(error.message);
+      setNotice(null);
+      setQrConnectError(error.message);
     },
   });
 
@@ -245,10 +291,10 @@ function Dashboard() {
     onSuccess: (data) => {
       applySettingsPayload(data);
       setNotice('Settings saved');
-      setConnectError(null);
+      setAttioConnectError(null);
     },
     onError: (error) => {
-      setConnectError(error.message);
+      setAttioConnectError(error.message);
     },
   });
 
@@ -263,7 +309,7 @@ function Dashboard() {
       });
     },
     onError: (error) => {
-      setConnectError(error.message);
+      setAttioConnectError(error.message);
     },
   });
 
@@ -275,7 +321,7 @@ function Dashboard() {
       });
     },
     onError: (error) => {
-      setConnectError(error.message);
+      setAttioConnectError(error.message);
     },
   });
 
@@ -290,7 +336,7 @@ function Dashboard() {
       });
     },
     onError: (error) => {
-      setConnectError(error.message);
+      setAttioConnectError(error.message);
     },
     onSettled: () => {
       if (fileInputRef.current) {
@@ -315,41 +361,41 @@ function Dashboard() {
       });
     },
     onError: (error) => {
-      setConnectError(error.message);
+      setAttioConnectError(error.message);
     },
   });
 
   function handleConnect() {
-    setConnectError(null);
+    setAttioConnectError(null);
     setNotice(null);
     connectIntegrationMut.mutate();
   }
 
   function handleDisconnect() {
-    setConnectError(null);
+    setAttioConnectError(null);
     setNotice(null);
     disconnectIntegrationMut.mutate();
   }
 
-  function handleOfficialWhatsappConnect() {
-    setWhatsappConnectError(null);
+  function handleWhatsappConnect() {
+    setQrConnectError(null);
     setNotice(null);
-    connectOfficialWhatsappMut.mutate();
+    connectWhatsappMut.mutate();
   }
 
   function handleWhatsappDisconnect() {
-    setWhatsappConnectError(null);
+    setQrConnectError(null);
     setNotice(null);
     disconnectWhatsappMut.mutate();
   }
 
   function handleUpdateSettings(update: Partial<ManagedInstallationSettings>) {
-    setConnectError(null);
+    setAttioConnectError(null);
     updateSettingsMut.mutate(update);
   }
 
   function handleAddNumberFilter() {
-    setConnectError(null);
+    setAttioConnectError(null);
     addFilterMut.mutate({
       phoneNumber: filterPhoneDraft,
       reason: filterReasonDraft || null,
@@ -357,7 +403,7 @@ function Dashboard() {
   }
 
   function handleDeleteNumberFilter(id: number) {
-    setConnectError(null);
+    setAttioConnectError(null);
     deleteFilterMut.mutate(id);
   }
 
@@ -387,7 +433,7 @@ function Dashboard() {
       return;
     }
 
-    setConnectError(null);
+    setAttioConnectError(null);
 
     try {
       const text = await file.text();
@@ -440,7 +486,7 @@ function Dashboard() {
 
       bulkImportMut.mutate(items);
     } catch (error) {
-      setConnectError(
+      setAttioConnectError(
         error instanceof Error ? error.message : 'Failed to import CSV',
       );
       if (fileInputRef.current) {
@@ -470,7 +516,7 @@ function Dashboard() {
   }
 
   function handleSaveGroupSync() {
-    setConnectError(null);
+    setAttioConnectError(null);
     saveGroupSyncMut.mutate({
       groupSyncEnabled: groupSyncEnabledDraft,
       groupSyncSelectedGroups: selectedGroupsDraft,
@@ -492,14 +538,21 @@ function Dashboard() {
     }
   }
 
-  const isConnecting = connectIntegrationMut.isPending;
-  const isDisconnecting = disconnectIntegrationMut.isPending;
-  const isOfficialWhatsappConnecting = connectOfficialWhatsappMut.isPending;
-  const isWhatsappDisconnecting = disconnectWhatsappMut.isPending;
+  const isAttioConnecting = connectIntegrationMut.isPending;
+  const isAttioDisconnecting = disconnectIntegrationMut.isPending;
+  const isConnecting = connectWhatsappMut.isPending;
+  const isDisconnecting = disconnectWhatsappMut.isPending;
   const isUpdatingSettings = updateSettingsMut.isPending;
   const isAddingFilter = addFilterMut.isPending;
   const isBulkImporting = bulkImportMut.isPending;
   const isSavingGroupSync = saveGroupSyncMut.isPending;
+  const showQr =
+    !whatsapp?.connected &&
+    whatsapp?.status === 'qr_ready' &&
+    whatsapp.qrCodeDataUrl;
+  const isWaitingForQr =
+    !whatsapp?.connected &&
+    (whatsapp?.status === 'connecting' || whatsapp?.status === 'reconnecting');
 
   const hasGroupSyncChanges =
     groupSyncEnabledDraft !== (settings?.groupSyncEnabled ?? false) ||
@@ -519,36 +572,275 @@ function Dashboard() {
       group.jid.toLowerCase().includes(groupSearchDraft.toLowerCase()),
   );
 
-  if (integrationStatus.isPending) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background/50">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-background/50 p-4 text-foreground md:p-8">
       <div className="mx-auto max-w-5xl space-y-8">
-        <DashboardHeader notice={notice} />
+        <section className="flex flex-col gap-4 border-b pb-6">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-fit px-0 hover:bg-transparent"
+            asChild
+          >
+            <Link to="/dashboard">
+              <ArrowLeft className="h-4 w-4" />
+              Dashboard
+            </Link>
+          </Button>
 
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-          <WhatsAppSessionCard
-            whatsapp={whatsapp}
-            connectError={whatsappConnectError}
-            onConnectOfficial={handleOfficialWhatsappConnect}
-            onDisconnect={handleWhatsappDisconnect}
-            isConnectingOfficial={isOfficialWhatsappConnecting}
-            isDisconnecting={isWhatsappDisconnecting}
-          />
-          <AttioIntegrationCard
-            status={status}
-            connectError={connectError}
-            onConnect={handleConnect}
-            onDisconnect={handleDisconnect}
-            isConnecting={isConnecting}
-            isDisconnecting={isDisconnecting}
-          />
+          <div className="flex items-center gap-3 text-primary">
+            <div className="rounded-xl bg-primary/10 p-2">
+              <QrCode className="h-6 w-6" />
+            </div>
+            <h1 className="text-3xl font-bold tracking-tight">
+              QR WhatsApp Connection
+            </h1>
+          </div>
+          <p className="max-w-2xl text-lg text-muted-foreground">
+            Connect WhatsApp as a linked device and keep this page open while
+            your phone scans the QR code.
+          </p>
+
+          {notice ? (
+            <div className="mt-2 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/10 p-4 text-primary animate-in fade-in slide-in-from-top-2">
+              <CheckCircle2 className="h-5 w-5 flex-shrink-0" />
+              <p className="text-sm font-medium">{notice}</p>
+            </div>
+          ) : null}
+        </section>
+
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(280px,0.75fr)]">
+          <Card className="shadow-none">
+            <CardHeader>
+              <div className="mb-1 flex items-center gap-2">
+                <Smartphone className="h-5 w-5 text-green-600" />
+                <CardTitle>Linked Device Setup</CardTitle>
+              </div>
+              <CardDescription>
+                Generate and scan a WhatsApp QR code
+              </CardDescription>
+            </CardHeader>
+
+            <CardContent className="space-y-6">
+              <div className="flex flex-col gap-3 rounded-xl border bg-muted/50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={
+                      whatsapp?.connected
+                        ? 'rounded-full bg-green-100 p-2 text-green-700'
+                        : 'rounded-full bg-muted-foreground/10 p-2 text-muted-foreground'
+                    }
+                  >
+                    {whatsapp?.connected ? (
+                      <CheckCircle2 className="h-4 w-4" />
+                    ) : (
+                      <AlertCircle className="h-4 w-4" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">Status</p>
+                    <p className="text-xs capitalize text-muted-foreground">
+                      {getStatusLabel(whatsapp)}
+                    </p>
+                  </div>
+                </div>
+                <Badge
+                  variant={whatsapp?.connected ? 'default' : 'secondary'}
+                  className="capitalize"
+                >
+                  {getStatusLabel(whatsapp)}
+                </Badge>
+              </div>
+
+              {whatsappStatus.isError ? (
+                <div className="flex gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+                  <XCircle className="h-5 w-5 flex-shrink-0" />
+                  <p>{whatsappStatus.error.message}</p>
+                </div>
+              ) : null}
+
+              {showQr ? (
+                <div className="rounded-xl border bg-white p-6">
+                  <div className="flex flex-col items-center text-center">
+                    <div className="space-y-1">
+                      <p className="text-base font-semibold text-foreground">
+                        Scan with WhatsApp
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Open WhatsApp on your phone and scan this QR code.
+                      </p>
+                    </div>
+
+                    <div className="mt-5 rounded-2xl border bg-white p-4 shadow-sm">
+                      <img
+                        src={whatsapp.qrCodeDataUrl ?? ''}
+                        alt="WhatsApp QR code"
+                        className="h-64 w-64 rounded-lg object-contain"
+                      />
+                    </div>
+
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      This page refreshes the connection status automatically.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+
+              {isWaitingForQr ? (
+                <div className="flex min-h-80 flex-col items-center justify-center rounded-xl border bg-white p-6 text-center">
+                  <Loader2 className="mb-4 h-8 w-8 animate-spin text-muted-foreground" />
+                  <p className="text-base font-semibold text-foreground">
+                    Preparing QR code
+                  </p>
+                  <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                    Keep this page open. The QR code will appear here when the
+                    WhatsApp session is ready.
+                  </p>
+                </div>
+              ) : null}
+
+              {!showQr && !isWaitingForQr && !whatsapp?.connected ? (
+                <div className="flex min-h-80 flex-col items-center justify-center rounded-xl border border-dashed bg-white p-6 text-center">
+                  <QrCode className="mb-4 h-10 w-10 text-muted-foreground" />
+                  <p className="text-base font-semibold text-foreground">
+                    Start QR setup
+                  </p>
+                  <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                    Generate a linked-device QR code, then scan it from WhatsApp
+                    on your phone.
+                  </p>
+                </div>
+              ) : null}
+
+              {whatsapp?.connected ? (
+                <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
+                  <div className="flex items-start gap-2">
+                    <CheckCircle2 className="h-5 w-5 flex-shrink-0" />
+                    <div>
+                      <p className="font-medium">WhatsApp is connected.</p>
+                      {whatsapp.phoneNumber || whatsapp.displayName ? (
+                        <p className="mt-1 text-green-700">
+                          {[whatsapp.displayName, whatsapp.phoneNumber]
+                            .filter(Boolean)
+                            .join(' - ')}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {whatsapp?.status === 'relink_required' ? (
+                <div className="flex gap-2 rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
+                  <AlertCircle className="h-5 w-5 flex-shrink-0" />
+                  <p>
+                    WhatsApp requires relinking.
+                    {whatsapp.disconnectCode
+                      ? ` (Code: ${whatsapp.disconnectCode})`
+                      : ''}{' '}
+                    Start setup again to generate a fresh QR code.
+                  </p>
+                </div>
+              ) : null}
+
+              {!whatsapp?.connected && qrConnectError ? (
+                <p className="flex items-center gap-1 text-sm text-destructive">
+                  <XCircle className="h-4 w-4 flex-shrink-0" />
+                  <span>{qrConnectError}</span>
+                </p>
+              ) : null}
+            </CardContent>
+
+            <CardFooter className="flex w-full flex-col gap-3 border-t pt-6 sm:flex-row">
+              <Button
+                className="w-full shadow-none sm:flex-1"
+                onClick={handleWhatsappConnect}
+                disabled={isConnecting || whatsapp?.connected}
+              >
+                {isConnecting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                {isConnecting
+                  ? 'Starting...'
+                  : showQr
+                    ? 'Refresh QR Code'
+                    : whatsapp?.connected
+                      ? 'Linked Device Connected'
+                      : 'Generate QR Code'}
+              </Button>
+
+              {whatsapp?.status && whatsapp.status !== 'disconnected' ? (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      variant="destructive"
+                      className="w-full sm:w-auto"
+                      disabled={isDisconnecting}
+                    >
+                      {isDisconnecting ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : null}
+                      Disconnect
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Disconnect WhatsApp?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This will end your current WhatsApp session. You'll need
+                        to scan a new QR code to reconnect.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        variant="destructive"
+                        onClick={handleWhatsappDisconnect}
+                      >
+                        Yes, Disconnect
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              ) : null}
+            </CardFooter>
+          </Card>
+
+          <div className="space-y-6">
+            <AttioIntegrationCard
+              status={attioStatus}
+              connectError={attioConnectError}
+              onConnect={handleConnect}
+              onDisconnect={handleDisconnect}
+              isConnecting={isAttioConnecting}
+              isDisconnecting={isAttioDisconnecting}
+            />
+
+            <Card className="h-fit shadow-none">
+              <CardHeader>
+                <CardTitle>Scan Steps</CardTitle>
+                <CardDescription>
+                  Use the linked-device flow in WhatsApp
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ol className="space-y-3">
+                  {qrSteps.map((step, index) => (
+                    <li key={step} className="flex items-start gap-3 text-sm">
+                      <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-green-600 text-xs font-semibold text-white">
+                        {index + 1}
+                      </span>
+                      <span className="leading-6 text-muted-foreground">
+                        {step}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </CardContent>
+            </Card>
+          </div>
         </div>
 
         {settings ? (
