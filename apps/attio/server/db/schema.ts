@@ -246,6 +246,34 @@ export const attioContactNotes = sqliteTable(
   ],
 );
 
+export const attioNoteMessageSyncs = sqliteTable(
+  'attio_note_message_syncs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    installationId: text('installation_id')
+      .notNull()
+      .references(() => installations.id),
+    whatsappMessageId: text('whatsapp_message_id').notNull(),
+    conversationKey: text('conversation_key').notNull(),
+    attioNoteId: text('attio_note_id'),
+    syncState: text('sync_state').notNull().default('processing'),
+    syncAttempts: integer('sync_attempts').notNull().default(1),
+    lastSyncError: text('last_sync_error'),
+    createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text('updated_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex('attio_note_message_syncs_installation_message_idx').on(
+      table.installationId,
+      table.whatsappMessageId,
+    ),
+    index('attio_note_message_syncs_installation_conversation_idx').on(
+      table.installationId,
+      table.conversationKey,
+    ),
+  ],
+);
+
 export type Installation = typeof installations.$inferSelect;
 export type NewInstallation = typeof installations.$inferInsert;
 export type WhatsappSession = typeof whatsappSessions.$inferSelect;
@@ -262,3 +290,5 @@ export type NumberFilterEntry = typeof numberFilterEntries.$inferSelect;
 export type NewNumberFilterEntry = typeof numberFilterEntries.$inferInsert;
 export type AttioContactNote = typeof attioContactNotes.$inferSelect;
 export type NewAttioContactNote = typeof attioContactNotes.$inferInsert;
+export type AttioNoteMessageSync = typeof attioNoteMessageSyncs.$inferSelect;
+export type NewAttioNoteMessageSync = typeof attioNoteMessageSyncs.$inferInsert;

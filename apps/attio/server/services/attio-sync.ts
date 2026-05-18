@@ -2,6 +2,11 @@ import {
   findAttioContactNote,
   upsertAttioContactNote,
 } from '@server/db/queries/attio-contact-notes';
+import {
+  claimAttioNoteMessageSync,
+  markAttioNoteMessageSyncFailed,
+  markAttioNoteMessageSyncSynced,
+} from '@server/db/queries/attio-note-message-syncs';
 import { findInstallationById } from '@server/db/queries/installations';
 import { findNumberFilterEntryByNormalizedPhone } from '@server/db/queries/number-filter-entries';
 import { findConnectedWabaConnectionByInstallationId } from '@server/db/queries/waba-connections';
@@ -345,99 +350,141 @@ async function syncMessageToAttio(input: {
     return 'skipped' as const;
   }
 
-  await client.ensureWhatsappAttributes();
-
-  const person = isGroup
-    ? await client.findOrCreateGroupPerson(message.chatJid, displayName)
-    : ((await client.findPersonByPhone(contactPhone ?? '')) ??
-      (await client.createPerson({
-        phone: contactPhone ?? conversationKey,
-        name: displayName,
-      })));
-  const recordId = person.id.record_id;
-  const attributesToUpdate = buildTrackingAttributeUpdate({
-    message,
-    currentValues: person.values,
-    metadataOnly,
-    contactPhone,
-    isGroup,
-    agentIdentity: await resolveAgentIdentity(installationId),
+  const messageSyncClaim = await claimAttioNoteMessageSync({
+    installationId,
+    whatsappMessageId: message.whatsappMessageId,
+    conversationKey,
   });
 
-  if (!extractAttributeValue(person.values, 'whatsapp_phone_number')) {
-    attributesToUpdate.whatsapp_phone_number = isGroup
-      ? message.chatJid
-      : contactPhone
-        ? contactPhone.startsWith('+')
-          ? contactPhone
-          : `+${contactPhone.replace(/\D/g, '')}`
-        : conversationKey;
+  if (messageSyncClaim.status === 'already_synced') {
+    await markWhatsappMessageSynced(message.id);
+    return 'synced' as const;
   }
 
-  await client.updatePerson(recordId, attributesToUpdate);
+  if (messageSyncClaim.status === 'in_progress') {
+    await markWhatsappMessagePending(
+      message.id,
+      'pending',
+      'attio_note_message_sync_in_progress',
+      getNextRetryAtIso(message.syncAttempts, 5_000),
+    );
+    return 'skipped' as const;
+  }
 
-  if (!metadataOnly) {
-    const existingNote = await findAttioContactNote({
-      installationId,
-      conversationKey,
-    });
-    const noteTitle = isGroup
-      ? `WhatsApp Group - ${displayName}`
-      : `WhatsApp Conversation - ${displayName}`;
-    const noteEntry = await formatNoteEntry({
+  try {
+    await client.ensureWhatsappAttributes();
+
+    const person = isGroup
+      ? await client.findOrCreateGroupPerson(message.chatJid, displayName)
+      : ((await client.findPersonByPhone(contactPhone ?? '')) ??
+        (await client.createPerson({
+          phone: contactPhone ?? conversationKey,
+          name: displayName,
+        })));
+    const recordId = person.id.record_id;
+    const attributesToUpdate = buildTrackingAttributeUpdate({
       message,
-      timezone: settings.timezone,
+      currentValues: person.values,
       metadataOnly,
+      contactPhone,
+      isGroup,
+      agentIdentity: await resolveAgentIdentity(installationId),
     });
 
-    if (existingNote) {
-      const attioNote = await client.getNote(existingNote.attioNoteId);
-      const replacement = attioNote
-        ? await client.replaceNote({
-            noteId: existingNote.attioNoteId,
-            parentObject: 'people',
-            parentRecordId: recordId,
-            title: noteTitle,
-            content: prependNoteEntry(noteEntry, extractNoteContent(attioNote)),
-          })
-        : await client.createNote({
-            parentObject: 'people',
-            parentRecordId: recordId,
-            title: noteTitle,
-            content: noteEntry,
-          });
-
-      await upsertAttioContactNote({
-        installationId,
-        conversationKey,
-        attioRecordId: recordId,
-        attioNoteId: replacement.id.note_id,
-        noteTitle,
-        lastMessageAt: message.sentAt,
-        messageCount: existingNote.messageCount + 1,
-      });
-    } else {
-      const note = await client.createNote({
-        parentObject: 'people',
-        parentRecordId: recordId,
-        title: noteTitle,
-        content: noteEntry,
-      });
-
-      await upsertAttioContactNote({
-        installationId,
-        conversationKey,
-        attioRecordId: recordId,
-        attioNoteId: note.id.note_id,
-        noteTitle,
-        lastMessageAt: message.sentAt,
-        messageCount: 1,
-      });
+    if (!extractAttributeValue(person.values, 'whatsapp_phone_number')) {
+      attributesToUpdate.whatsapp_phone_number = isGroup
+        ? message.chatJid
+        : contactPhone
+          ? contactPhone.startsWith('+')
+            ? contactPhone
+            : `+${contactPhone.replace(/\D/g, '')}`
+          : conversationKey;
     }
-  }
 
-  await markWhatsappMessageSynced(message.id);
-  return 'synced' as const;
+    await client.updatePerson(recordId, attributesToUpdate);
+
+    let syncedAttioNoteId: string | null = null;
+
+    if (!metadataOnly) {
+      const existingNote = await findAttioContactNote({
+        installationId,
+        conversationKey,
+      });
+      const noteTitle = isGroup
+        ? `WhatsApp Group - ${displayName}`
+        : `WhatsApp Conversation - ${displayName}`;
+      const noteEntry = await formatNoteEntry({
+        message,
+        timezone: settings.timezone,
+        metadataOnly,
+      });
+
+      if (existingNote) {
+        const attioNote = await client.getNote(existingNote.attioNoteId);
+        const replacement = attioNote
+          ? await client.replaceNote({
+              noteId: existingNote.attioNoteId,
+              parentObject: 'people',
+              parentRecordId: recordId,
+              title: noteTitle,
+              content: prependNoteEntry(
+                noteEntry,
+                extractNoteContent(attioNote),
+              ),
+            })
+          : await client.createNote({
+              parentObject: 'people',
+              parentRecordId: recordId,
+              title: noteTitle,
+              content: noteEntry,
+            });
+
+        syncedAttioNoteId = replacement.id.note_id;
+
+        await upsertAttioContactNote({
+          installationId,
+          conversationKey,
+          attioRecordId: recordId,
+          attioNoteId: syncedAttioNoteId,
+          noteTitle,
+          lastMessageAt: message.sentAt,
+          messageCount: existingNote.messageCount + 1,
+        });
+      } else {
+        const note = await client.createNote({
+          parentObject: 'people',
+          parentRecordId: recordId,
+          title: noteTitle,
+          content: noteEntry,
+        });
+
+        syncedAttioNoteId = note.id.note_id;
+
+        await upsertAttioContactNote({
+          installationId,
+          conversationKey,
+          attioRecordId: recordId,
+          attioNoteId: syncedAttioNoteId,
+          noteTitle,
+          lastMessageAt: message.sentAt,
+          messageCount: 1,
+        });
+      }
+    }
+
+    await markAttioNoteMessageSyncSynced({
+      id: messageSyncClaim.sync.id,
+      attioNoteId: syncedAttioNoteId,
+    });
+    await markWhatsappMessageSynced(message.id);
+    return 'synced' as const;
+  } catch (error) {
+    await markAttioNoteMessageSyncFailed({
+      id: messageSyncClaim.sync.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 export async function syncPendingAttioMessages(
