@@ -103,6 +103,22 @@ export async function listInstallationIdsWithPendingWhatsappMessages(
   return rows.map((row) => row.installationId);
 }
 
+function hasRetainedWhatsappMessageContent(message: WhatsappMessage) {
+  return (
+    message.textBody !== null ||
+    message.hasMedia ||
+    message.mediaType !== null ||
+    message.mediaMimeType !== null ||
+    message.mediaFileName !== null ||
+    message.mediaObjectKey !== null ||
+    message.locationLatitude !== null ||
+    message.locationLongitude !== null ||
+    message.locationName !== null ||
+    message.locationAddress !== null ||
+    message.rawMessageJson !== null
+  );
+}
+
 async function scrubWhatsappMessageContent(
   id: number,
   values: Partial<
@@ -125,11 +141,22 @@ async function scrubWhatsappMessageContent(
       ? existing.lastSyncError
       : values.lastSyncError;
 
+  const desiredNextRetryAt = values.nextRetryAt ?? null;
+  const alreadyScrubbed =
+    existing.syncState === syncState &&
+    existing.nextRetryAt === desiredNextRetryAt &&
+    existing.lastSyncError === lastSyncError &&
+    !hasRetainedWhatsappMessageContent(existing);
+
+  if (alreadyScrubbed) {
+    return existing;
+  }
+
   const [message] = await db
     .update(whatsappMessages)
     .set({
       syncState,
-      nextRetryAt: values.nextRetryAt ?? null,
+      nextRetryAt: desiredNextRetryAt,
       lastSyncError,
       textBody: null,
       hasMedia: false,
@@ -154,9 +181,29 @@ export async function scrubProcessedWhatsappMessages() {
     .select()
     .from(whatsappMessages)
     .where(
-      or(
-        eq(whatsappMessages.syncState, 'synced'),
-        eq(whatsappMessages.syncState, 'filtered'),
+      and(
+        or(
+          eq(whatsappMessages.syncState, 'synced'),
+          eq(whatsappMessages.syncState, 'filtered'),
+        ),
+        or(
+          isNotNull(whatsappMessages.textBody),
+          eq(whatsappMessages.hasMedia, true),
+          isNotNull(whatsappMessages.mediaType),
+          isNotNull(whatsappMessages.mediaMimeType),
+          isNotNull(whatsappMessages.mediaFileName),
+          isNotNull(whatsappMessages.mediaObjectKey),
+          isNotNull(whatsappMessages.locationLatitude),
+          isNotNull(whatsappMessages.locationLongitude),
+          isNotNull(whatsappMessages.locationName),
+          isNotNull(whatsappMessages.locationAddress),
+          isNotNull(whatsappMessages.rawMessageJson),
+          isNotNull(whatsappMessages.nextRetryAt),
+          and(
+            eq(whatsappMessages.syncState, 'synced'),
+            isNotNull(whatsappMessages.lastSyncError),
+          ),
+        ),
       ),
     );
 

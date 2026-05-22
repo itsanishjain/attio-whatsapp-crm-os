@@ -9,11 +9,13 @@ import {
 } from '@server/services/attio-sync';
 
 const POLL_INTERVAL_MS = env.NODE_ENV === 'test' ? 1_000 : 5_000;
+const SCRUB_INTERVAL_MS = env.NODE_ENV === 'test' ? 1_000 : 5 * 60_000;
 const INSTALLATION_BATCH_SIZE = 25;
 const MESSAGE_BATCH_SIZE = 25;
 
 let isRunning = false;
 let isShuttingDown = false;
+let lastScrubStartedAt = 0;
 
 async function scrubRetainedWhatsappMessages() {
   const cutoff = new Date(
@@ -40,7 +42,14 @@ async function runWorkerTick() {
   isRunning = true;
 
   try {
-    await scrubRetainedWhatsappMessages();
+    const now = Date.now();
+    if (
+      lastScrubStartedAt === 0 ||
+      now - lastScrubStartedAt >= SCRUB_INTERVAL_MS
+    ) {
+      lastScrubStartedAt = now;
+      await scrubRetainedWhatsappMessages();
+    }
 
     const installationIds = await listInstallationIdsWithPendingAttioMessages(
       INSTALLATION_BATCH_SIZE,
