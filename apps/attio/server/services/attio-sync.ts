@@ -8,7 +8,10 @@ import {
   markAttioNoteMessageSyncSynced,
 } from '@server/db/queries/attio-note-message-syncs';
 import { findInstallationById } from '@server/db/queries/installations';
-import { findNumberFilterEntryByNormalizedPhone } from '@server/db/queries/number-filter-entries';
+import {
+  createNumberFilterEntry,
+  findNumberFilterEntryByNormalizedPhone,
+} from '@server/db/queries/number-filter-entries';
 import { findConnectedWabaConnectionByInstallationId } from '@server/db/queries/waba-connections';
 import {
   type WhatsappMessageRecord,
@@ -46,6 +49,8 @@ export type AttioSyncResult = {
   errors: string[];
 };
 
+const AUTO_INCLUDE_REASON = 'Auto-added from Attio';
+
 function getNextRetryAtIso(syncAttempts: number, baseMs = 15_000) {
   const delayMs = Math.min(baseMs * 2 ** Math.min(syncAttempts, 4), 5 * 60_000);
   return new Date(Date.now() + delayMs).toISOString();
@@ -59,6 +64,7 @@ async function shouldFilterMessage(
   installationId: string,
   message: WhatsappMessageRecord,
   settings: ReturnType<typeof parseManagedInstallationSettings>,
+  client: AttioClient,
 ) {
   if (message.chatJid.endsWith('@g.us')) {
     return false;
@@ -77,7 +83,39 @@ async function shouldFilterMessage(
   );
 
   if (settings.numberFilterMode === 'include') {
-    return !filterEntry;
+    if (filterEntry) {
+      return false;
+    }
+
+    if (!settings.includeAutoSyncFromAttio) {
+      return true;
+    }
+
+    await client.ensureWhatsappAttributes();
+    const attioPerson = await client.findPersonByPhone(normalizedPhone);
+    if (!attioPerson) {
+      return true;
+    }
+
+    try {
+      await createNumberFilterEntry({
+        installationId,
+        phoneNumber: message.remotePhone ?? normalizedPhone,
+        normalizedPhone,
+        reason: AUTO_INCLUDE_REASON,
+      });
+    } catch (error) {
+      console.warn(
+        '[attio-sync] Failed to auto-add Attio person to include list',
+        {
+          installationId,
+          normalizedPhone,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+    }
+
+    return false;
   }
 
   return Boolean(filterEntry);
@@ -550,7 +588,9 @@ export async function syncPendingAttioMessages(
         continue;
       }
 
-      if (await shouldFilterMessage(installationId, message, settings)) {
+      if (
+        await shouldFilterMessage(installationId, message, settings, client)
+      ) {
         await markWhatsappMessageFiltered(message.id, 'number_filtered');
         skipped += 1;
         continue;

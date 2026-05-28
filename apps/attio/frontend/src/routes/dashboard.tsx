@@ -602,9 +602,13 @@ function Dashboard() {
               />
               <NumberFiltersCard
                 numberFilterMode={settings.numberFilterMode}
+                includeAutoSyncFromAttio={settings.includeAutoSyncFromAttio}
                 isUpdatingSettings={isUpdatingSettings}
                 onNumberFilterModeChange={(mode) =>
                   handleUpdateSettings({ numberFilterMode: mode })
+                }
+                onIncludeAutoSyncFromAttioChange={(enabled) =>
+                  handleUpdateSettings({ includeAutoSyncFromAttio: enabled })
                 }
                 filterPhoneDraft={filterPhoneDraft}
                 onFilterPhoneDraftChange={setFilterPhoneDraft}

@@ -85,6 +85,7 @@ type MetaStatus = {
 type WabaPrivacyContext = {
   metadataOnly: boolean;
   numberFilterMode: 'exclude' | 'include';
+  includeAutoSyncFromAttio: boolean;
   numberFilterPhones: Set<string>;
 };
 
@@ -223,7 +224,7 @@ function shouldFilterPhone(
   const hasFilterEntry = privacy.numberFilterPhones.has(normalizedPhone);
 
   if (privacy.numberFilterMode === 'include') {
-    return !hasFilterEntry;
+    return !hasFilterEntry && !privacy.includeAutoSyncFromAttio;
   }
 
   return hasFilterEntry;
@@ -243,6 +244,7 @@ async function getWabaPrivacyContext(
   return {
     metadataOnly: settings.syncSharingMode === 'metadata_only',
     numberFilterMode: settings.numberFilterMode,
+    includeAutoSyncFromAttio: settings.includeAutoSyncFromAttio,
     numberFilterPhones: new Set(
       numberFilters.map((filter) => filter.normalizedPhone),
     ),

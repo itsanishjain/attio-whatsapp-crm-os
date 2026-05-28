@@ -132,7 +132,7 @@ function shouldFilterNormalizedMessage(
   const hasFilterEntry = context.numberFilterPhones.has(normalizedPhone);
 
   if (context.settings.numberFilterMode === 'include') {
-    return !hasFilterEntry;
+    return !hasFilterEntry && !context.settings.includeAutoSyncFromAttio;
   }
 
   return hasFilterEntry;

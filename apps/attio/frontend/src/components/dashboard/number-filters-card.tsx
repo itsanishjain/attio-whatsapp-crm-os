@@ -16,8 +16,10 @@ import type { ChangeEvent, RefObject } from 'react';
 
 type NumberFiltersCardProps = {
   numberFilterMode: NumberFilterMode;
+  includeAutoSyncFromAttio: boolean;
   isUpdatingSettings: boolean;
   onNumberFilterModeChange: (mode: NumberFilterMode) => void;
+  onIncludeAutoSyncFromAttioChange: (enabled: boolean) => void;
   filterPhoneDraft: string;
   onFilterPhoneDraftChange: (value: string) => void;
   filterReasonDraft: string;
@@ -34,8 +36,10 @@ type NumberFiltersCardProps = {
 
 export function NumberFiltersCard({
   numberFilterMode,
+  includeAutoSyncFromAttio,
   isUpdatingSettings,
   onNumberFilterModeChange,
+  onIncludeAutoSyncFromAttioChange,
   filterPhoneDraft,
   onFilterPhoneDraftChange,
   filterReasonDraft,
@@ -79,6 +83,47 @@ export function NumberFiltersCard({
             Include Only
           </button>
         </div>
+
+        {numberFilterMode === 'include' ? (
+          <div className="rounded-md border bg-muted/20 p-3">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium">Auto-include Attio people</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  If an unlisted number already exists in Attio, add it to the
+                  include list and sync it.
+                </p>
+              </div>
+              <label className="flex shrink-0 cursor-pointer items-center">
+                <div className="relative">
+                  <input
+                    type="checkbox"
+                    className="sr-only"
+                    checked={includeAutoSyncFromAttio}
+                    onChange={() =>
+                      onIncludeAutoSyncFromAttioChange(
+                        !includeAutoSyncFromAttio,
+                      )
+                    }
+                    disabled={isUpdatingSettings}
+                  />
+                  <div
+                    className={`block h-6 w-10 rounded-full transition-colors ${includeAutoSyncFromAttio ? 'bg-primary' : 'bg-input'}`}
+                  />
+                  <div
+                    className={`absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform ${includeAutoSyncFromAttio ? 'translate-x-4 transform' : ''}`}
+                  />
+                </div>
+              </label>
+            </div>
+            {isUpdatingSettings ? (
+              <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Saving preference...
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="flex gap-2">
           <input

@@ -20,6 +20,7 @@ const persistedInstallationSettingsSchema =
     syncSharingMode: 'full_access',
     timezone: 'UTC',
     numberFilterMode: 'exclude',
+    includeAutoSyncFromAttio: false,
     groupSyncEnabled: false,
     groupSyncSelectedGroups: [],
   });
@@ -65,6 +66,7 @@ export function parseManagedInstallationSettings(
     syncSharingMode: parsed.syncSharingMode,
     timezone: parsed.timezone,
     numberFilterMode: parsed.numberFilterMode,
+    includeAutoSyncFromAttio: parsed.includeAutoSyncFromAttio,
     groupSyncEnabled: parsed.groupSyncEnabled,
     groupSyncSelectedGroups: parsed.groupSyncSelectedGroups,
   });
@@ -110,6 +112,8 @@ export async function updateManagedInstallationSettings(
     syncSharingMode: update.syncSharingMode ?? existing.syncSharingMode,
     timezone: update.timezone ?? existing.timezone,
     numberFilterMode: update.numberFilterMode ?? existing.numberFilterMode,
+    includeAutoSyncFromAttio:
+      update.includeAutoSyncFromAttio ?? existing.includeAutoSyncFromAttio,
     groupSyncEnabled: update.groupSyncEnabled ?? existing.groupSyncEnabled,
     groupSyncSelectedGroups:
       update.groupSyncSelectedGroups ?? existing.groupSyncSelectedGroups,

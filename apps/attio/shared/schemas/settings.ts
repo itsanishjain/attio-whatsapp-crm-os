@@ -37,6 +37,7 @@ export const managedInstallationSettingsSchema = z.object({
   syncSharingMode: syncSharingModeSchema.default('full_access'),
   timezone: z.string().min(1).default('UTC'),
   numberFilterMode: numberFilterModeSchema.default('exclude'),
+  includeAutoSyncFromAttio: z.boolean().default(false),
   groupSyncEnabled: z.boolean().default(false),
   groupSyncSelectedGroups: z.array(groupSyncSelectedGroupSchema).default([]),
 });
@@ -63,6 +64,7 @@ export const updateInstallationSettingsRequestSchema = z
     syncSharingMode: syncSharingModeSchema.optional(),
     timezone: z.string().min(1).optional(),
     numberFilterMode: numberFilterModeSchema.optional(),
+    includeAutoSyncFromAttio: z.boolean().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
     message:
