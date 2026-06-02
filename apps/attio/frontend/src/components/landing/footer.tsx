@@ -28,6 +28,12 @@ export function Footer() {
         >
           Docs
         </Link>
+        <Link
+          className="text-sm font-medium text-muted-foreground hover:text-primary"
+          to="/pricing"
+        >
+          Pricing
+        </Link>
         <a
           className="text-sm font-medium text-muted-foreground hover:text-primary"
           href="mailto:hello@appstronauts.shop"

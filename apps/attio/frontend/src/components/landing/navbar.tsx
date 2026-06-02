@@ -30,6 +30,12 @@ export function Navbar() {
           >
             Docs
           </Link>
+          <Link
+            className="text-sm font-medium leading-normal hover:text-primary"
+            to="/pricing"
+          >
+            Pricing
+          </Link>
         </div>
         <Button>
           <Link to="/dashboard">Get Access</Link>
