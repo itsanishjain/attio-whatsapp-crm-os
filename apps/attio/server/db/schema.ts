@@ -195,6 +195,40 @@ export const whatsappMessages = sqliteTable(
   ],
 );
 
+export const syncJobs = sqliteTable(
+  'sync_jobs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    installationId: text('installation_id')
+      .notNull()
+      .references(() => installations.id),
+    whatsappMessageRowId: integer('whatsapp_message_row_id')
+      .notNull()
+      .references(() => whatsappMessages.id),
+    whatsappMessageId: text('whatsapp_message_id').notNull(),
+    status: text('status').notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    nextRunAt: text('next_run_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+    lockedAt: text('locked_at'),
+    lockedBy: text('locked_by'),
+    lastError: text('last_error'),
+    createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text('updated_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex('sync_jobs_installation_message_idx').on(
+      table.installationId,
+      table.whatsappMessageId,
+    ),
+    index('sync_jobs_ready_idx').on(table.status, table.nextRunAt),
+    index('sync_jobs_installation_status_idx').on(
+      table.installationId,
+      table.status,
+    ),
+    index('sync_jobs_locked_at_idx').on(table.lockedAt),
+  ],
+);
+
 export const numberFilterEntries = sqliteTable(
   'number_filter_entries',
   {
@@ -286,6 +320,8 @@ export type WhatsappContact = typeof whatsappContacts.$inferSelect;
 export type NewWhatsappContact = typeof whatsappContacts.$inferInsert;
 export type WhatsappMessage = typeof whatsappMessages.$inferSelect;
 export type NewWhatsappMessage = typeof whatsappMessages.$inferInsert;
+export type SyncJob = typeof syncJobs.$inferSelect;
+export type NewSyncJob = typeof syncJobs.$inferInsert;
 export type NumberFilterEntry = typeof numberFilterEntries.$inferSelect;
 export type NewNumberFilterEntry = typeof numberFilterEntries.$inferInsert;
 export type AttioContactNote = typeof attioContactNotes.$inferSelect;

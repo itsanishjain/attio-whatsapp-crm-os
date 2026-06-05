@@ -1,21 +1,59 @@
 import {
+  type ClaimedSyncJob,
+  claimReadySyncJobs,
+  markSyncJobRetryableFailure,
+  repairMissingSyncJobs,
+} from '@server/db/queries/sync-jobs';
+import {
   scrubExpiredWhatsappMessages,
   scrubProcessedWhatsappMessages,
 } from '@server/db/queries/whatsapp-messages';
 import { env } from '@server/env';
-import {
-  listInstallationIdsWithPendingAttioMessages,
-  syncPendingAttioMessages,
-} from '@server/services/attio-sync';
+import { syncClaimedAttioMessageJobs } from '@server/services/attio-sync';
 
 const POLL_INTERVAL_MS = env.NODE_ENV === 'test' ? 1_000 : 5_000;
 const SCRUB_INTERVAL_MS = env.NODE_ENV === 'test' ? 1_000 : 5 * 60_000;
-const INSTALLATION_BATCH_SIZE = 25;
-const MESSAGE_BATCH_SIZE = 25;
+const REPAIR_INTERVAL_MS = env.NODE_ENV === 'test' ? 30_000 : 15 * 60_000;
+const JOB_BATCH_SIZE = 100;
+const REPAIR_BATCH_SIZE = 500;
+const WORKER_ID = `attio-sync-worker-${process.pid}-${Math.random()
+  .toString(36)
+  .slice(2)}`;
 
 let isRunning = false;
 let isShuttingDown = false;
 let lastScrubStartedAt = 0;
+let lastRepairStartedAt = 0;
+
+function groupJobsByInstallation(jobs: ClaimedSyncJob[]) {
+  const jobsByInstallation = new Map<string, ClaimedSyncJob[]>();
+
+  for (const job of jobs) {
+    const installationJobs = jobsByInstallation.get(job.installationId);
+    if (installationJobs) {
+      installationJobs.push(job);
+    } else {
+      jobsByInstallation.set(job.installationId, [job]);
+    }
+  }
+
+  return jobsByInstallation;
+}
+
+async function markJobsRetryableAfterGroupFailure(
+  jobs: ClaimedSyncJob[],
+  error: unknown,
+) {
+  const errorMessage =
+    error instanceof Error ? error.message : 'Unknown worker sync error';
+  const nextRunAt = new Date(Date.now() + 60_000).toISOString();
+
+  await Promise.all(
+    jobs.map((job) =>
+      markSyncJobRetryableFailure(job, errorMessage, nextRunAt),
+    ),
+  );
+}
 
 async function scrubRetainedWhatsappMessages() {
   const cutoff = new Date(
@@ -31,6 +69,22 @@ async function scrubRetainedWhatsappMessages() {
     console.log(
       `[worker] Scrubbed content from ${scrubbed} retained WhatsApp message row(s)`,
     );
+  }
+}
+
+async function repairMissingJobsIfDue(now: number) {
+  if (
+    lastRepairStartedAt !== 0 &&
+    now - lastRepairStartedAt < REPAIR_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  lastRepairStartedAt = now;
+  const repaired = await repairMissingSyncJobs(REPAIR_BATCH_SIZE);
+
+  if (repaired > 0) {
+    console.log(`[worker] Repaired ${repaired} missing sync job(s)`);
   }
 }
 
@@ -51,29 +105,34 @@ async function runWorkerTick() {
       await scrubRetainedWhatsappMessages();
     }
 
-    const installationIds = await listInstallationIdsWithPendingAttioMessages(
-      INSTALLATION_BATCH_SIZE,
-    );
+    await repairMissingJobsIfDue(now);
 
-    if (installationIds.length === 0) {
+    const jobs = await claimReadySyncJobs(JOB_BATCH_SIZE, WORKER_ID);
+
+    if (jobs.length === 0) {
       return;
     }
 
+    const jobsByInstallation = groupJobsByInstallation(jobs);
+
     console.log(
-      `[worker] Found ${installationIds.length} installation(s) with pending Attio sync work`,
+      `[worker] Claimed ${jobs.length} sync job(s) across ${jobsByInstallation.size} installation(s)`,
     );
 
     await Promise.all(
-      installationIds.map(async (installationId) => {
-        try {
-          await syncPendingAttioMessages(installationId, MESSAGE_BATCH_SIZE);
-        } catch (error) {
-          console.error(
-            `[worker] Attio sync failed for installation ${installationId}`,
-            error,
-          );
-        }
-      }),
+      Array.from(jobsByInstallation.entries()).map(
+        async ([installationId, installationJobs]) => {
+          try {
+            await syncClaimedAttioMessageJobs(installationId, installationJobs);
+          } catch (error) {
+            await markJobsRetryableAfterGroupFailure(installationJobs, error);
+            console.error(
+              `[worker] Attio sync failed for installation ${installationId}`,
+              error,
+            );
+          }
+        },
+      ),
     );
   } catch (error) {
     console.error('[worker] Attio sync tick failed entirely', error);
@@ -83,7 +142,7 @@ async function runWorkerTick() {
 }
 
 console.log(
-  `[worker] Polling pending Attio sync work every ${POLL_INTERVAL_MS}ms (${env.NODE_ENV} mode)`,
+  `[worker] Polling sync_jobs every ${POLL_INTERVAL_MS}ms (${env.NODE_ENV} mode) as ${WORKER_ID}`,
 );
 
 void runWorkerTick();

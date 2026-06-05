@@ -12,16 +12,24 @@ import {
   createNumberFilterEntry,
   findNumberFilterEntryByNormalizedPhone,
 } from '@server/db/queries/number-filter-entries';
+import {
+  type ClaimedSyncJob,
+  markSyncJobDead,
+  markSyncJobRetryableFailure,
+  markSyncJobSucceeded,
+} from '@server/db/queries/sync-jobs';
 import { findConnectedWabaConnectionByInstallationId } from '@server/db/queries/waba-connections';
 import {
   type WhatsappMessageRecord,
   listInstallationIdsWithPendingWhatsappMessages,
   listUnsyncedWhatsappMessages,
+  listWhatsappMessagesByIds,
   markWhatsappMessageFiltered,
   markWhatsappMessagePending,
   markWhatsappMessageSynced,
 } from '@server/db/queries/whatsapp-messages';
 import { findWhatsappSessionByInstallationId } from '@server/db/queries/whatsapp-sessions';
+import type { Installation } from '@server/db/schema';
 import { AttioClient } from '@server/services/attio-client';
 import { getConfiguredGroupName } from '@server/services/group-service';
 import { parseManagedInstallationSettings } from '@server/services/installation-settings-service';
@@ -54,6 +62,22 @@ const AUTO_INCLUDE_REASON = 'Auto-added from Attio';
 function getNextRetryAtIso(syncAttempts: number, baseMs = 15_000) {
   const delayMs = Math.min(baseMs * 2 ** Math.min(syncAttempts, 4), 5 * 60_000);
   return new Date(Date.now() + delayMs).toISOString();
+}
+
+async function markJobSucceeded(job: ClaimedSyncJob | undefined) {
+  if (job) {
+    await markSyncJobSucceeded(job.id);
+  }
+}
+
+async function markJobRetryable(
+  job: ClaimedSyncJob | undefined,
+  error: string,
+  nextRunAt: string,
+) {
+  if (job) {
+    await markSyncJobRetryableFailure(job, error, nextRunAt);
+  }
 }
 
 function isMediaUploadStillPending(message: WhatsappMessageRecord) {
@@ -369,6 +393,7 @@ async function syncMessageToAttio(input: {
   installationSettingsJson: string | null;
   settings: ReturnType<typeof parseManagedInstallationSettings>;
   message: WhatsappMessageRecord;
+  job?: ClaimedSyncJob;
 }) {
   const {
     client,
@@ -376,6 +401,7 @@ async function syncMessageToAttio(input: {
     installationSettingsJson,
     settings,
     message,
+    job,
   } = input;
   const isGroup = message.chatJid.endsWith('@g.us');
   const conversationKey = getConversationKey(message);
@@ -385,6 +411,7 @@ async function syncMessageToAttio(input: {
 
   if (!isGroup && !contactPhone) {
     await markWhatsappMessageFiltered(message.id, 'missing_contact_phone');
+    await markJobSucceeded(job);
     return 'skipped' as const;
   }
 
@@ -396,15 +423,22 @@ async function syncMessageToAttio(input: {
 
   if (messageSyncClaim.status === 'already_synced') {
     await markWhatsappMessageSynced(message.id);
+    await markJobSucceeded(job);
     return 'synced' as const;
   }
 
   if (messageSyncClaim.status === 'in_progress') {
+    const nextRetryAt = getNextRetryAtIso(message.syncAttempts, 5_000);
     await markWhatsappMessagePending(
       message.id,
       'pending',
       'attio_note_message_sync_in_progress',
-      getNextRetryAtIso(message.syncAttempts, 5_000),
+      nextRetryAt,
+    );
+    await markJobRetryable(
+      job,
+      'attio_note_message_sync_in_progress',
+      nextRetryAt,
     );
     return 'skipped' as const;
   }
@@ -515,6 +549,7 @@ async function syncMessageToAttio(input: {
       attioNoteId: syncedAttioNoteId,
     });
     await markWhatsappMessageSynced(message.id);
+    await markJobSucceeded(job);
     return 'synced' as const;
   } catch (error) {
     await markAttioNoteMessageSyncFailed({
@@ -525,65 +560,139 @@ async function syncMessageToAttio(input: {
   }
 }
 
-export async function syncPendingAttioMessages(
-  installationId: string,
-  limit = 20,
+type AttioSyncWorkItem = {
+  message: WhatsappMessageRecord | null;
+  job?: ClaimedSyncJob;
+};
+
+function createEmptySyncResult(installationId: string): AttioSyncResult {
+  return {
+    ok: true,
+    installationId,
+    processed: 0,
+    synced: 0,
+    skipped: 0,
+    failed: 0,
+    errors: [],
+  };
+}
+
+async function syncAttioWorkItems(
+  installation: Installation,
+  workItems: AttioSyncWorkItem[],
 ): Promise<AttioSyncResult> {
-  const installation = await findInstallationById(installationId);
+  const installationId = installation.id;
   const errors: string[] = [];
   let synced = 0;
   let skipped = 0;
   let failed = 0;
-
-  if (!installation) {
-    return {
-      ok: true,
-      installationId,
-      processed: 0,
-      synced,
-      skipped,
-      failed,
-      errors: ['installation_not_found'],
-    };
-  }
-
   const auth = parseIntegrationAuthJson(installation.authJson);
   const accessToken = getIntegrationAccessToken(auth);
-  const messages = await listUnsyncedWhatsappMessages(installationId, limit);
 
   if (!accessToken) {
-    for (const message of messages) {
+    for (const { message, job } of workItems) {
+      if (!message) {
+        if (job) {
+          await markSyncJobDead(job.id, 'whatsapp_message_not_found');
+        }
+        failed += 1;
+        continue;
+      }
+
+      if (
+        message.installationId !== installationId ||
+        (job && message.whatsappMessageId !== job.whatsappMessageId)
+      ) {
+        if (job) {
+          await markSyncJobDead(job.id, 'sync_job_message_mismatch');
+        }
+        failed += 1;
+        continue;
+      }
+
+      if (message.syncState === 'synced') {
+        await markJobSucceeded(job);
+        synced += 1;
+        continue;
+      }
+
+      if (message.syncState === 'filtered') {
+        await markJobSucceeded(job);
+        skipped += 1;
+        continue;
+      }
+
+      const nextRetryAt = getNextRetryAtIso(message.syncAttempts);
       await markWhatsappMessagePending(
         message.id,
         'failed',
         'attio_not_connected',
-        getNextRetryAtIso(message.syncAttempts),
+        nextRetryAt,
       );
+      await markJobRetryable(job, 'attio_not_connected', nextRetryAt);
+      failed += 1;
     }
 
     return {
       ok: true,
       installationId,
-      processed: messages.length,
+      processed: workItems.length,
       synced,
       skipped,
-      failed: messages.length,
-      errors: messages.length ? ['attio_not_connected'] : [],
+      failed,
+      errors: workItems.length ? ['attio_not_connected'] : [],
     };
   }
 
   const client = new AttioClient(accessToken);
   const settings = parseManagedInstallationSettings(installation.settingsJson);
 
-  for (const message of messages) {
+  for (const { message, job } of workItems) {
+    if (!message) {
+      const errorMessage = 'whatsapp_message_not_found';
+      if (job) {
+        await markSyncJobDead(job.id, errorMessage);
+      }
+      failed += 1;
+      errors.push(errorMessage);
+      continue;
+    }
+
+    if (
+      message.installationId !== installationId ||
+      (job && message.whatsappMessageId !== job.whatsappMessageId)
+    ) {
+      const errorMessage = 'sync_job_message_mismatch';
+      if (job) {
+        await markSyncJobDead(job.id, errorMessage);
+      }
+      failed += 1;
+      errors.push(errorMessage);
+      continue;
+    }
+
+    if (message.syncState === 'synced') {
+      await markJobSucceeded(job);
+      synced += 1;
+      continue;
+    }
+
+    if (message.syncState === 'filtered') {
+      await markJobSucceeded(job);
+      skipped += 1;
+      continue;
+    }
+
     try {
       if (isMediaUploadStillPending(message)) {
+        const nextRetryAt = getNextRetryAtIso(message.syncAttempts, 5_000);
         await markWhatsappMessagePending(
           message.id,
           'pending',
           'media_upload_pending',
-          getNextRetryAtIso(message.syncAttempts, 5_000),
+          nextRetryAt,
         );
+        await markJobRetryable(job, 'media_upload_pending', nextRetryAt);
         skipped += 1;
         continue;
       }
@@ -592,6 +701,7 @@ export async function syncPendingAttioMessages(
         await shouldFilterMessage(installationId, message, settings, client)
       ) {
         await markWhatsappMessageFiltered(message.id, 'number_filtered');
+        await markJobSucceeded(job);
         skipped += 1;
         continue;
       }
@@ -602,6 +712,7 @@ export async function syncPendingAttioMessages(
         installationSettingsJson: installation.settingsJson,
         settings,
         message,
+        job,
       });
 
       if (result === 'synced') {
@@ -614,22 +725,79 @@ export async function syncPendingAttioMessages(
       const messageText =
         error instanceof Error ? error.message : String(error);
       errors.push(messageText);
+      const nextRetryAt = getNextRetryAtIso(message.syncAttempts);
       await markWhatsappMessagePending(
         message.id,
         'failed',
         messageText,
-        getNextRetryAtIso(message.syncAttempts),
+        nextRetryAt,
       );
+      await markJobRetryable(job, messageText, nextRetryAt);
     }
   }
 
   return {
     ok: true,
     installationId,
-    processed: messages.length,
+    processed: workItems.length,
     synced,
     skipped,
     failed,
     errors,
   };
+}
+
+export async function syncPendingAttioMessages(
+  installationId: string,
+  limit = 20,
+): Promise<AttioSyncResult> {
+  const installation = await findInstallationById(installationId);
+
+  if (!installation) {
+    return {
+      ...createEmptySyncResult(installationId),
+      errors: ['installation_not_found'],
+    };
+  }
+
+  const messages = await listUnsyncedWhatsappMessages(installationId, limit);
+  return syncAttioWorkItems(
+    installation,
+    messages.map((message) => ({ message })),
+  );
+}
+
+export async function syncClaimedAttioMessageJobs(
+  installationId: string,
+  jobs: ClaimedSyncJob[],
+): Promise<AttioSyncResult> {
+  const installation = await findInstallationById(installationId);
+
+  if (!installation) {
+    await Promise.all(
+      jobs.map((job) => markSyncJobDead(job.id, 'installation_not_found')),
+    );
+
+    return {
+      ...createEmptySyncResult(installationId),
+      processed: jobs.length,
+      failed: jobs.length,
+      errors: jobs.length ? ['installation_not_found'] : [],
+    };
+  }
+
+  const messages = await listWhatsappMessagesByIds(
+    jobs.map((job) => job.whatsappMessageRowId),
+  );
+  const messagesById = new Map(
+    messages.map((message) => [message.id, message]),
+  );
+
+  return syncAttioWorkItems(
+    installation,
+    jobs.map((job) => ({
+      job,
+      message: messagesById.get(job.whatsappMessageRowId) ?? null,
+    })),
+  );
 }

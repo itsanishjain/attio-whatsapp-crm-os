@@ -4,6 +4,7 @@ import {
   count,
   desc,
   eq,
+  inArray,
   isNotNull,
   isNull,
   lte,
@@ -12,6 +13,7 @@ import {
 } from 'drizzle-orm';
 
 import { db } from '@server/db/client';
+import { enqueueSyncJobForMessage } from '@server/db/queries/sync-jobs';
 import {
   type NewWhatsappMessage,
   type WhatsappMessage,
@@ -46,6 +48,17 @@ export async function findWhatsappMessageByExternalId(
     .limit(1);
 
   return message ?? null;
+}
+
+export async function listWhatsappMessagesByIds(ids: number[]) {
+  if (ids.length === 0) {
+    return [];
+  }
+
+  return db
+    .select()
+    .from(whatsappMessages)
+    .where(inArray(whatsappMessages.id, ids));
 }
 
 export async function listUnsyncedWhatsappMessages(
@@ -271,6 +284,8 @@ export async function upsertWhatsappMessage(
     })
     .returning();
 
+  await enqueueSyncJobForMessage(message);
+
   return message;
 }
 
@@ -287,6 +302,10 @@ export async function insertWhatsappMessageIfNew(
       ],
     })
     .returning();
+
+  if (message) {
+    await enqueueSyncJobForMessage(message);
+  }
 
   return message ?? null;
 }
@@ -381,6 +400,10 @@ export async function updateWhatsappMessageMedia(
       ),
     )
     .returning();
+
+  if (message) {
+    await enqueueSyncJobForMessage(message);
+  }
 
   return message ?? null;
 }
