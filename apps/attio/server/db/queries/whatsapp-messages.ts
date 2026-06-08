@@ -132,17 +132,59 @@ function hasRetainedWhatsappMessageContent(message: WhatsappMessage) {
   );
 }
 
+function processedWhatsappMessagesNeedingScrub() {
+  return and(
+    or(
+      eq(whatsappMessages.syncState, 'synced'),
+      eq(whatsappMessages.syncState, 'filtered'),
+    ),
+    or(
+      isNotNull(whatsappMessages.textBody),
+      eq(whatsappMessages.hasMedia, true),
+      isNotNull(whatsappMessages.mediaType),
+      isNotNull(whatsappMessages.mediaMimeType),
+      isNotNull(whatsappMessages.mediaFileName),
+      isNotNull(whatsappMessages.mediaObjectKey),
+      isNotNull(whatsappMessages.locationLatitude),
+      isNotNull(whatsappMessages.locationLongitude),
+      isNotNull(whatsappMessages.locationName),
+      isNotNull(whatsappMessages.locationAddress),
+      isNotNull(whatsappMessages.rawMessageJson),
+      isNotNull(whatsappMessages.nextRetryAt),
+      and(
+        eq(whatsappMessages.syncState, 'synced'),
+        isNotNull(whatsappMessages.lastSyncError),
+      ),
+    ),
+  );
+}
+
+function expiredWhatsappMessagesNeedingScrub(cutoffIso: string) {
+  return and(
+    or(
+      eq(whatsappMessages.syncState, 'pending'),
+      eq(whatsappMessages.syncState, 'failed'),
+    ),
+    lte(whatsappMessages.createdAt, cutoffIso),
+  );
+}
+
 async function scrubWhatsappMessageContent(
   id: number,
   values: Partial<
     Pick<NewWhatsappMessage, 'syncState' | 'nextRetryAt' | 'lastSyncError'>
   >,
+  existingMessage?: WhatsappMessage,
 ) {
-  const [existing] = await db
-    .select()
-    .from(whatsappMessages)
-    .where(eq(whatsappMessages.id, id))
-    .limit(1);
+  const existing =
+    existingMessage ??
+    (
+      await db
+        .select()
+        .from(whatsappMessages)
+        .where(eq(whatsappMessages.id, id))
+        .limit(1)
+    )[0];
 
   if (!existing) {
     return null;
@@ -189,65 +231,74 @@ async function scrubWhatsappMessageContent(
   return message ?? null;
 }
 
-export async function scrubProcessedWhatsappMessages() {
+export type ScrubRetainedWhatsappMessagesResult = {
+  scrubbed: number;
+  hasMore: boolean;
+};
+
+async function scrubProcessedWhatsappMessageBatch(limit: number) {
   const rows = await db
     .select()
     .from(whatsappMessages)
-    .where(
-      and(
-        or(
-          eq(whatsappMessages.syncState, 'synced'),
-          eq(whatsappMessages.syncState, 'filtered'),
-        ),
-        or(
-          isNotNull(whatsappMessages.textBody),
-          eq(whatsappMessages.hasMedia, true),
-          isNotNull(whatsappMessages.mediaType),
-          isNotNull(whatsappMessages.mediaMimeType),
-          isNotNull(whatsappMessages.mediaFileName),
-          isNotNull(whatsappMessages.mediaObjectKey),
-          isNotNull(whatsappMessages.locationLatitude),
-          isNotNull(whatsappMessages.locationLongitude),
-          isNotNull(whatsappMessages.locationName),
-          isNotNull(whatsappMessages.locationAddress),
-          isNotNull(whatsappMessages.rawMessageJson),
-          isNotNull(whatsappMessages.nextRetryAt),
-          and(
-            eq(whatsappMessages.syncState, 'synced'),
-            isNotNull(whatsappMessages.lastSyncError),
-          ),
-        ),
-      ),
-    );
+    .where(processedWhatsappMessagesNeedingScrub())
+    .orderBy(asc(whatsappMessages.id))
+    .limit(limit);
 
-  return Promise.all(
-    rows.map((message) => scrubWhatsappMessageContent(message.id, {})),
+  const scrubbed = await Promise.all(
+    rows.map((message) => scrubWhatsappMessageContent(message.id, {}, message)),
   );
+
+  return {
+    scrubbed: scrubbed.filter((message) => message !== null).length,
+    hasMore: rows.length === limit,
+  };
 }
 
-export async function scrubExpiredWhatsappMessages(cutoffIso: string) {
+async function scrubExpiredWhatsappMessageBatch(
+  cutoffIso: string,
+  limit: number,
+) {
   const rows = await db
     .select()
     .from(whatsappMessages)
-    .where(
-      and(
-        or(
-          eq(whatsappMessages.syncState, 'pending'),
-          eq(whatsappMessages.syncState, 'failed'),
-        ),
-        lte(whatsappMessages.createdAt, cutoffIso),
-      ),
-    );
+    .where(expiredWhatsappMessagesNeedingScrub(cutoffIso))
+    .orderBy(asc(whatsappMessages.id))
+    .limit(limit);
 
-  return Promise.all(
+  const scrubbed = await Promise.all(
     rows.map((message) =>
-      scrubWhatsappMessageContent(message.id, {
-        syncState: 'filtered',
-        nextRetryAt: null,
-        lastSyncError: 'retention_expired',
-      }),
+      scrubWhatsappMessageContent(
+        message.id,
+        {
+          syncState: 'filtered',
+          nextRetryAt: null,
+          lastSyncError: 'retention_expired',
+        },
+        message,
+      ),
     ),
   );
+
+  return {
+    scrubbed: scrubbed.filter((message) => message !== null).length,
+    hasMore: rows.length === limit,
+  };
+}
+
+export async function scrubRetainedWhatsappMessages(
+  cutoffIso: string,
+  batchSize = 200,
+): Promise<ScrubRetainedWhatsappMessagesResult> {
+  const perBatch = Math.max(1, Math.ceil(batchSize / 2));
+  const [processed, expired] = await Promise.all([
+    scrubProcessedWhatsappMessageBatch(perBatch),
+    scrubExpiredWhatsappMessageBatch(cutoffIso, perBatch),
+  ]);
+
+  return {
+    scrubbed: processed.scrubbed + expired.scrubbed,
+    hasMore: processed.hasMore || expired.hasMore,
+  };
 }
 
 export async function upsertWhatsappMessage(

@@ -4,15 +4,14 @@ import {
   markSyncJobRetryableFailure,
   repairMissingSyncJobs,
 } from '@server/db/queries/sync-jobs';
-import {
-  scrubExpiredWhatsappMessages,
-  scrubProcessedWhatsappMessages,
-} from '@server/db/queries/whatsapp-messages';
+import { scrubRetainedWhatsappMessages } from '@server/db/queries/whatsapp-messages';
 import { env } from '@server/env';
 import { syncClaimedAttioMessageJobs } from '@server/services/attio-sync';
 
 const POLL_INTERVAL_MS = env.NODE_ENV === 'test' ? 1_000 : 5_000;
 const SCRUB_INTERVAL_MS = env.NODE_ENV === 'test' ? 1_000 : 5 * 60_000;
+const SCRUB_INTERVAL_MAX_MS = env.NODE_ENV === 'test' ? 5_000 : 60 * 60_000;
+const SCRUB_BATCH_SIZE = 200;
 const REPAIR_INTERVAL_MS = env.NODE_ENV === 'test' ? 30_000 : 15 * 60_000;
 const JOB_BATCH_SIZE = 100;
 const REPAIR_BATCH_SIZE = 500;
@@ -23,6 +22,7 @@ const WORKER_ID = `attio-sync-worker-${process.pid}-${Math.random()
 let isRunning = false;
 let isShuttingDown = false;
 let lastScrubStartedAt = 0;
+let currentScrubIntervalMs = SCRUB_INTERVAL_MS;
 let lastRepairStartedAt = 0;
 
 function groupJobsByInstallation(jobs: ClaimedSyncJob[]) {
@@ -55,21 +55,29 @@ async function markJobsRetryableAfterGroupFailure(
   );
 }
 
-async function scrubRetainedWhatsappMessages() {
+async function runScrubTick() {
   const cutoff = new Date(
     Date.now() - env.WHATSAPP_MESSAGE_RETENTION_HOURS * 60 * 60 * 1000,
   ).toISOString();
-  const [processed, expired] = await Promise.all([
-    scrubProcessedWhatsappMessages(),
-    scrubExpiredWhatsappMessages(cutoff),
-  ]);
-  const scrubbed = processed.length + expired.length;
+  const { scrubbed, hasMore } = await scrubRetainedWhatsappMessages(
+    cutoff,
+    SCRUB_BATCH_SIZE,
+  );
 
-  if (scrubbed > 0) {
-    console.log(
-      `[worker] Scrubbed content from ${scrubbed} retained WhatsApp message row(s)`,
-    );
+  if (scrubbed > 0 || hasMore) {
+    currentScrubIntervalMs = SCRUB_INTERVAL_MS;
+    if (scrubbed > 0) {
+      console.log(
+        `[worker] Scrubbed content from ${scrubbed} retained WhatsApp message row(s)`,
+      );
+    }
+    return;
   }
+
+  currentScrubIntervalMs = Math.min(
+    currentScrubIntervalMs * 2,
+    SCRUB_INTERVAL_MAX_MS,
+  );
 }
 
 async function repairMissingJobsIfDue(now: number) {
@@ -99,10 +107,10 @@ async function runWorkerTick() {
     const now = Date.now();
     if (
       lastScrubStartedAt === 0 ||
-      now - lastScrubStartedAt >= SCRUB_INTERVAL_MS
+      now - lastScrubStartedAt >= currentScrubIntervalMs
     ) {
       lastScrubStartedAt = now;
-      await scrubRetainedWhatsappMessages();
+      await runScrubTick();
     }
 
     await repairMissingJobsIfDue(now);
