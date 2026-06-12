@@ -10,6 +10,7 @@ import {
   baileysSessionStatusSchema,
   whatsappGroupOptionSchema,
 } from '@whatsapp-crm/core/schemas/baileys';
+import { z } from 'zod';
 
 import { appBaileysRuntimeConfig } from '@server/services/baileys-events';
 import {
@@ -20,6 +21,21 @@ import {
 // ── Runtime singleton ────────────────────────────────────────────────────
 
 export const appBaileysRuntime = createBaileysRuntime(appBaileysRuntimeConfig);
+
+const rawWhatsappGroupOptionSchema = whatsappGroupOptionSchema.extend({
+  name: z.string().nullish(),
+});
+
+function parseWhatsappGroups(payload: unknown) {
+  const groups = rawWhatsappGroupOptionSchema.array().parse(payload);
+
+  return whatsappGroupOptionSchema.array().parse(
+    groups.map((group) => ({
+      ...group,
+      name: group.name?.trim() || group.jid,
+    })),
+  );
+}
 
 export async function sendWhatsappMessageViaLocalRuntime(
   installationId: string,
@@ -57,7 +73,7 @@ export async function disconnectLocalBaileysSession(
 }
 
 export async function listLocalWhatsappGroups(installationId: string) {
-  return appBaileysRuntime.listGroups(installationId);
+  return parseWhatsappGroups(await appBaileysRuntime.listGroups(installationId));
 }
 
 // ── Remote service client ────────────────────────────────────────────────
@@ -149,7 +165,7 @@ export async function listWhatsappGroups(installationId: string) {
     throw new Error(`Baileys service failed with ${response.status}: ${body}`);
   }
 
-  return whatsappGroupOptionSchema.array().parse(await response.json());
+  return parseWhatsappGroups(await response.json());
 }
 
 export async function sendWhatsappMessageViaService(
