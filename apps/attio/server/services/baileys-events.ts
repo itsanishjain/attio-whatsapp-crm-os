@@ -121,6 +121,13 @@ export const appBaileysRuntimeConfig = {
         console.error('Failed to ingest WhatsApp messages', error);
       }
     },
+    onMessagesUpdate: async (installationId, messages) => {
+      try {
+        await handleMessagesUpsert(installationId, messages, 'messages.update');
+      } catch (error) {
+        console.error('Failed to ingest recovered WhatsApp messages', error);
+      }
+    },
     onConnectionOpen: syncGroupNamesToContacts,
   },
   socketOptions: {

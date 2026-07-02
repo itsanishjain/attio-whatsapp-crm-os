@@ -25,6 +25,7 @@ import {
   hasMediaContent,
   isSelfEchoMessage,
   isSkippableProtocolMessage,
+  isUnavailableBaileysMessageStub,
   resolveMessageContactName,
   summarizeMessage,
   unwrapMessageContent,
@@ -69,6 +70,10 @@ function explainSkippedMessage(
 
   if (isSkippableProtocolMessage(content)) {
     return 'protocol_message';
+  }
+
+  if (isUnavailableBaileysMessageStub(message)) {
+    return 'placeholder_pending';
   }
 
   const textBody = extractTextBody(content);
