@@ -6,35 +6,10 @@ const optionalString = z
   .transform((value) => (value === '' ? undefined : value))
   .optional();
 
-const DEFAULT_BAILEYS_SOCKET_VERSION: [number, number, number] = [
-  2, 3000, 1035176028,
-];
-
-const socketVersionSchema = z.preprocess(
-  (value) => {
-    if (Array.isArray(value)) {
-      return value;
-    }
-
-    if (typeof value !== 'string') {
-      return value;
-    }
-
-    return value
-      .split(',')
-      .map((part) => Number(part.trim()))
-      .filter((part) => Number.isInteger(part));
-  },
-  z.tuple([z.number().int(), z.number().int(), z.number().int()]),
-);
-
 const envSchema = z.object({
   BAILEYS_INGEST_TIMING: z
     .preprocess((val) => val === 'true', z.boolean())
     .default(false),
-  BAILEYS_SOCKET_VERSION: socketVersionSchema.default(
-    DEFAULT_BAILEYS_SOCKET_VERSION,
-  ),
   DATABASE_URL: z.string().min(1).default('file:local.db'),
   FRONTEND_APP_URL: z.string().url().default('http://localhost:5175'),
   NODE_ENV: z

@@ -132,6 +132,5 @@ export const appBaileysRuntimeConfig = {
   },
   socketOptions: {
     browserName: APP_SERVICE_NAME,
-    socketVersion: env.BAILEYS_SOCKET_VERSION,
   },
 } satisfies BaileysRuntimeConfig;
