@@ -92,3 +92,61 @@ export async function upsertWhatsappSession(values: NewWhatsappSession) {
 
   return session;
 }
+
+type WhatsappReachoutTimelockUpdate = {
+  installationId: string;
+  isActive: boolean;
+  enforcementType: string | null;
+  enforcementEndsAt: string | null;
+  observedAt: string;
+};
+
+export async function updateWhatsappSessionReachoutTimelock(
+  input: WhatsappReachoutTimelockUpdate,
+) {
+  const [existing] = await db
+    .select({
+      active: whatsappSessions.reachoutTimelockActive,
+      enforcementType: whatsappSessions.reachoutTimelockType,
+      detectedAt: whatsappSessions.reachoutTimelockDetectedAt,
+      enforcementEndsAt: whatsappSessions.reachoutTimelockEndsAt,
+    })
+    .from(whatsappSessions)
+    .where(eq(whatsappSessions.installationId, input.installationId))
+    .limit(1);
+
+  if (!existing) {
+    throw new Error(
+      `Cannot persist reachout timelock for missing WhatsApp session ${input.installationId}`,
+    );
+  }
+
+  const enforcementType = input.enforcementType ?? existing.enforcementType;
+  const enforcementEndsAt =
+    input.enforcementEndsAt ?? existing.enforcementEndsAt;
+  const continuesExistingRestriction =
+    input.isActive &&
+    existing.active &&
+    existing.enforcementType === enforcementType &&
+    existing.enforcementEndsAt === enforcementEndsAt;
+
+  const [session] = await db
+    .update(whatsappSessions)
+    .set({
+      reachoutTimelockActive: input.isActive,
+      reachoutTimelockType: enforcementType,
+      reachoutTimelockDetectedAt: input.isActive
+        ? continuesExistingRestriction
+          ? (existing.detectedAt ?? input.observedAt)
+          : input.observedAt
+        : existing.detectedAt,
+      reachoutTimelockEndsAt: enforcementEndsAt,
+      reachoutTimelockLiftedAt: input.isActive ? null : input.observedAt,
+      reachoutTimelockLastEventAt: input.observedAt,
+      updatedAt: sql`CURRENT_TIMESTAMP`,
+    })
+    .where(eq(whatsappSessions.installationId, input.installationId))
+    .returning();
+
+  return session;
+}

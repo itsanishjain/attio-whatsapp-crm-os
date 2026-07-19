@@ -10,6 +10,7 @@ import {
 import {
   findWhatsappSessionByInstallationId,
   findWhatsappSessionsWithStoredAuthState,
+  updateWhatsappSessionReachoutTimelock,
   upsertWhatsappSession,
 } from '@server/db/queries/whatsapp-sessions';
 import { env } from '@server/env';
@@ -129,6 +130,30 @@ export const appBaileysRuntimeConfig = {
       }
     },
     onConnectionOpen: syncGroupNamesToContacts,
+    onConnectionUpdate: (installationId, update) => {
+      const timelock = update.reachoutTimeLock;
+      if (!timelock) {
+        return;
+      }
+
+      const enforcementEndsAt =
+        timelock.timeEnforcementEnds instanceof Date
+          ? timelock.timeEnforcementEnds.toISOString()
+          : null;
+
+      void updateWhatsappSessionReachoutTimelock({
+        installationId,
+        isActive: timelock.isActive === true,
+        enforcementType: timelock.enforcementType ?? null,
+        enforcementEndsAt,
+        observedAt: new Date().toISOString(),
+      }).catch((error) => {
+        console.error(
+          `[baileys-risk] Failed to persist reachout timelock for installation ${installationId}`,
+          error,
+        );
+      });
+    },
   },
   socketOptions: {
     browserName: APP_SERVICE_NAME,

@@ -53,6 +53,16 @@ export const whatsappSessions = sqliteTable(
     lastDisconnectAt: text('last_disconnect_at'),
     lastErrorJson: text('last_error_json'),
     lastSeenAt: text('last_seen_at'),
+    reachoutTimelockActive: integer('reachout_timelock_active', {
+      mode: 'boolean',
+    })
+      .notNull()
+      .default(sql`0`),
+    reachoutTimelockType: text('reachout_timelock_type'),
+    reachoutTimelockDetectedAt: text('reachout_timelock_detected_at'),
+    reachoutTimelockEndsAt: text('reachout_timelock_ends_at'),
+    reachoutTimelockLiftedAt: text('reachout_timelock_lifted_at'),
+    reachoutTimelockLastEventAt: text('reachout_timelock_last_event_at'),
     ...timestamps,
   },
   (table) => [
