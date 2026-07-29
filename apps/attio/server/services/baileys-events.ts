@@ -15,6 +15,10 @@ import {
 } from '@server/db/queries/whatsapp-sessions';
 import { env } from '@server/env';
 import {
+  getBaileysSocketVersion,
+  refreshBaileysSocketVersion,
+} from '@server/services/baileys-socket-version';
+import {
   getMessageRetryPayload,
   ingestWhatsappMessages,
 } from '@server/services/baileys-sync';
@@ -131,6 +135,16 @@ export const appBaileysRuntimeConfig = {
     },
     onConnectionOpen: syncGroupNamesToContacts,
     onConnectionUpdate: (installationId, update) => {
+      const disconnectStatusCode = (
+        update.lastDisconnect?.error as
+          | { output?: { statusCode?: number } }
+          | undefined
+      )?.output?.statusCode;
+
+      if (disconnectStatusCode === 405) {
+        void refreshBaileysSocketVersion();
+      }
+
       const timelock = update.reachoutTimeLock;
       if (!timelock) {
         return;
@@ -157,5 +171,8 @@ export const appBaileysRuntimeConfig = {
   },
   socketOptions: {
     browserName: APP_SERVICE_NAME,
+    get socketVersion() {
+      return getBaileysSocketVersion();
+    },
   },
 } satisfies BaileysRuntimeConfig;
